@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import type { ErrorRequestHandler, Request, Response } from 'express';
 import { z } from 'zod';
-import { db } from './db.ts';
+import { get } from './db.ts';
 
 /* -------------------------------------------------------------------------- */
 /*                                   Errors                                   */
@@ -40,8 +40,12 @@ export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
     res.status(400).json({ error: { code: 'INVALID_JSON', message: 'Request body is not valid JSON' } });
     return;
   }
-  if (typeof err?.message === 'string' && err.message.includes('UNIQUE constraint failed')) {
+  if (err?.code === '23505') {
     res.status(409).json({ error: { code: 'CONFLICT', message: 'That record already exists' } });
+    return;
+  }
+  if (err?.code === '23503') {
+    res.status(404).json({ error: { code: 'NOT_FOUND', message: 'A referenced record was not found' } });
     return;
   }
   console.error(err);
@@ -60,12 +64,12 @@ export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
 export type Role = 'public' | 'parent' | 'staff';
 export type AuthContext = { role: 'public' } | { role: 'staff' } | { role: 'parent'; parentId: string };
 
-function resolveAuth(req: Request): AuthContext {
+async function resolveAuth(req: Request): Promise<AuthContext> {
   const role = req.header('x-role');
   if (role === 'staff') return { role: 'staff' };
   if (role === 'parent') {
     const parentId = req.header('x-parent-id');
-    if (parentId && db.prepare('SELECT 1 FROM parents WHERE id = ?').get(parentId)) return { role: 'parent', parentId };
+    if (parentId && (await get('SELECT 1 FROM parents WHERE id = ?', [parentId]))) return { role: 'parent', parentId };
   }
   return { role: 'public' };
 }
@@ -117,7 +121,7 @@ export function defineRoute<A extends Role, B extends Schema = undefined, Q exte
   registry.push(meta as RouteMeta);
 
   apiRouter[meta.method](meta.path, async (req, res) => {
-    const auth = resolveAuth(req);
+    const auth = await resolveAuth(req);
     if (meta.auth !== 'public' && auth.role !== meta.auth) {
       throw auth.role === 'public'
         ? new HttpError(401, 'UNAUTHENTICATED', `Sign in as ${meta.auth} to use this endpoint`)

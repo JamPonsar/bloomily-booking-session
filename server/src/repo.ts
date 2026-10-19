@@ -2,7 +2,7 @@
  * Row ↔ object mapping and shared queries. SQL stays snake_case; the API is camelCase.
  */
 import type { Booking, Child, Parent, Session, StaffChildView } from '../../shared/schemas.ts';
-import { db } from './db.ts';
+import { all, get } from './db.ts';
 import { notFound } from './http.ts';
 
 type Row = Record<string, unknown>;
@@ -98,25 +98,25 @@ export const SESSION_SELECT = `
   SELECT s.*, (SELECT COUNT(*) FROM bookings b WHERE b.session_id = s.id AND b.status = 'confirmed') AS booked_count
   FROM sessions s`;
 
-export function getSession(id: string): Session {
-  const row = db.prepare(`${SESSION_SELECT} WHERE s.id = ?`).get(id) as Row | undefined;
+export async function getSession(id: string): Promise<Session> {
+  const row = await get(`${SESSION_SELECT} WHERE s.id = ?`, [id]);
   if (!row) throw notFound('Session');
   return toSession(row);
 }
 
-export function getParent(id: string): Parent {
-  const row = db.prepare('SELECT * FROM parents WHERE id = ?').get(id) as Row | undefined;
+export async function getParent(id: string): Promise<Parent> {
+  const row = await get('SELECT * FROM parents WHERE id = ?', [id]);
   if (!row) throw notFound('Parent');
   return toParent(row);
 }
 
-export function listChildren(parentId: string): Child[] {
-  return (db.prepare('SELECT * FROM children WHERE parent_id = ? ORDER BY date_of_birth').all(parentId) as Row[]).map(toChild);
+export async function listChildren(parentId: string): Promise<Child[]> {
+  return (await all('SELECT * FROM children WHERE parent_id = ? ORDER BY date_of_birth', [parentId])).map(toChild);
 }
 
 /** Fetches a child only if it belongs to the given parent (prevents IDOR). */
-export function getOwnChild(parentId: string, childId: string): Child {
-  const row = db.prepare('SELECT * FROM children WHERE id = ? AND parent_id = ?').get(childId, parentId) as Row | undefined;
+export async function getOwnChild(parentId: string, childId: string): Promise<Child> {
+  const row = await get('SELECT * FROM children WHERE id = ? AND parent_id = ?', [childId, parentId]);
   if (!row) throw notFound('Child');
   return toChild(row);
 }

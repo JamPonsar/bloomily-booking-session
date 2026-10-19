@@ -32,7 +32,7 @@ export function ApiDocsPage() {
       <header className="page-header">
         <div>
           <h1>API & Schemas</h1>
-          <p className="muted">Generated live from the server's route registry, Zod schemas and SQLite catalog. It can't drift out of date.</p>
+          <p className="muted">Generated live from the server's route registry, Zod schemas and Postgres catalog. It can't drift out of date.</p>
         </div>
       </header>
 
@@ -87,7 +87,7 @@ export function ApiDocsPage() {
 
           <section id="database" className="docs-section">
             <h2 className="section-title">Database tables</h2>
-            <p className="muted small">Read from SQLite at request time (<code>PRAGMA table_info / foreign_key_list / index_list</code>).</p>
+            <p className="muted small">Read from Postgres at request time (<code>information_schema</code> and <code>pg_indexes</code>).</p>
             <div className="schema-grid">
               {meta?.tables.map((t) => <TableCard key={t.name} table={t} />)}
             </div>

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { Child, ChildInput, ParentBooking, ParentInput, ParentProfile } from '../../../shared/schemas.ts';
-import { db } from '../db.ts';
+import { all, get, run } from '../db.ts';
 import { HttpError, defineRoute } from '../http.ts';
 import { newId } from '../ids.ts';
 import { SESSION_SELECT, getOwnChild, getParent, listChildren, toBooking, toSession } from '../repo.ts';
@@ -15,7 +15,7 @@ defineRoute(
     auth: 'parent',
     response: ParentProfile,
   },
-  ({ auth }) => ({ ...getParent(auth.parentId), children: listChildren(auth.parentId) }),
+  async ({ auth }) => ({ ...(await getParent(auth.parentId)), children: await listChildren(auth.parentId) }),
 );
 
 defineRoute(
@@ -28,17 +28,17 @@ defineRoute(
     body: ParentInput,
     response: ParentProfile,
   },
-  ({ auth, body }) => {
-    const clash = db.prepare('SELECT 1 FROM parents WHERE email = ? AND id <> ?').get(body.email, auth.parentId);
+  async ({ auth, body }) => {
+    const clash = await get('SELECT 1 FROM parents WHERE email = ? AND id <> ?', [body.email, auth.parentId]);
     if (clash) throw new HttpError(409, 'EMAIL_TAKEN', 'Another account already uses that email', { email: 'Already in use' });
-    db.prepare(`
+    await run(`
       UPDATE parents SET first_name = ?, last_name = ?, email = ?, phone = ?, address = ?,
         emergency_contact_name = ?, emergency_contact_phone = ?, updated_at = ?
-      WHERE id = ?`).run(
+      WHERE id = ?`, [
       body.firstName, body.lastName, body.email, body.phone, body.address,
       body.emergencyContactName, body.emergencyContactPhone, new Date().toISOString(), auth.parentId,
-    );
-    return { ...getParent(auth.parentId), children: listChildren(auth.parentId) };
+    ]);
+    return { ...(await getParent(auth.parentId)), children: await listChildren(auth.parentId) };
   },
 );
 
@@ -53,14 +53,14 @@ defineRoute(
     body: ChildInput,
     response: Child,
   },
-  ({ auth, body }) => {
+  async ({ auth, body }) => {
     const id = newId('chd');
     const now = new Date().toISOString();
-    db.prepare(`
+    await run(`
       INSERT INTO children (id, parent_id, first_name, last_name, date_of_birth, dietary_restrictions, medical_notes, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
       id, auth.parentId, body.firstName, body.lastName, body.dateOfBirth, JSON.stringify(body.dietaryRestrictions), body.medicalNotes, now, now,
-    );
+    ]);
     return getOwnChild(auth.parentId, id);
   },
 );
@@ -75,14 +75,14 @@ defineRoute(
     body: ChildInput,
     response: Child,
   },
-  ({ auth, body, params }) => {
-    getOwnChild(auth.parentId, params.childId);
-    db.prepare(`
+  async ({ auth, body, params }) => {
+    await getOwnChild(auth.parentId, params.childId);
+    await run(`
       UPDATE children SET first_name = ?, last_name = ?, date_of_birth = ?, dietary_restrictions = ?, medical_notes = ?, updated_at = ?
-      WHERE id = ? AND parent_id = ?`).run(
+      WHERE id = ? AND parent_id = ?`, [
       body.firstName, body.lastName, body.dateOfBirth, JSON.stringify(body.dietaryRestrictions), body.medicalNotes,
       new Date().toISOString(), params.childId, auth.parentId,
-    );
+    ]);
     return getOwnChild(auth.parentId, params.childId);
   },
 );
@@ -97,15 +97,16 @@ defineRoute(
     auth: 'parent',
     status: 204,
   },
-  ({ auth, params }) => {
-    getOwnChild(auth.parentId, params.childId);
-    const upcoming = db.prepare(`
+  async ({ auth, params }) => {
+    await getOwnChild(auth.parentId, params.childId);
+    const row = await get<{ n: string }>(`
       SELECT COUNT(*) AS n FROM bookings b JOIN sessions s ON s.id = b.session_id
-      WHERE b.child_id = ? AND b.status = 'confirmed' AND s.ends_at > ?`).get(params.childId, new Date().toISOString()) as { n: number };
-    if (upcoming.n > 0) {
-      throw new HttpError(409, 'CHILD_HAS_BOOKINGS', `Cancel this child's ${upcoming.n} upcoming booking${upcoming.n > 1 ? 's' : ''} first`);
+      WHERE b.child_id = ? AND b.status = 'confirmed' AND s.ends_at > ?`, [params.childId, new Date().toISOString()]);
+    const upcoming = Number(row?.n ?? 0);
+    if (upcoming > 0) {
+      throw new HttpError(409, 'CHILD_HAS_BOOKINGS', `Cancel this child's ${upcoming} upcoming booking${upcoming > 1 ? 's' : ''} first`);
     }
-    db.prepare('DELETE FROM children WHERE id = ? AND parent_id = ?').run(params.childId, auth.parentId);
+    await run('DELETE FROM children WHERE id = ? AND parent_id = ?', [params.childId, auth.parentId]);
   },
 );
 
@@ -119,16 +120,18 @@ defineRoute(
     auth: 'parent',
     response: z.array(ParentBooking),
   },
-  ({ auth }) => {
-    const rows = db.prepare(`
+  async ({ auth }) => {
+    const rows = await all(`
       SELECT b.*, c.first_name AS c_first, c.last_name AS c_last
       FROM bookings b JOIN children c ON c.id = b.child_id
-      WHERE b.parent_id = ?`).all(auth.parentId) as Array<Record<string, unknown>>;
-    const sessionStmt = db.prepare(`${SESSION_SELECT} WHERE s.id = ?`);
+      WHERE b.parent_id = ?`, [auth.parentId]);
+    const sessions = new Map(
+      (await all(`${SESSION_SELECT} WHERE s.id = ANY(?)`, [[...new Set(rows.map((r) => r.session_id as string))]])).map((r) => [r.id as string, toSession(r)]),
+    );
     return rows
       .map((r) => ({
         ...toBooking(r),
-        session: toSession(sessionStmt.get(r.session_id as string) as Record<string, unknown>),
+        session: sessions.get(r.session_id as string)!,
         child: { id: r.child_id as string, firstName: r.c_first as string, lastName: r.c_last as string },
       }))
       .sort((a, b) => b.session.startsAt.localeCompare(a.session.startsAt));

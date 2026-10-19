@@ -39,7 +39,7 @@ export const COMPONENTS: ComponentDoc[] = [
 
   // Hooks & context
   { kind: 'Hook', name: 'useQuery / invalidate', file: 'client/src/hooks/useQuery.ts', description: 'Data fetching with loading/error state, optional polling (paused in background tabs) and key-prefix invalidation after mutations.' },
-  { kind: 'Hook', name: 'usePresenceCounts', file: 'client/src/hooks/usePresence.ts', description: 'Polls live head-counts for every session every 3 seconds.', apis: ['GET /api/presence'] },
+  { kind: 'Hook', name: 'usePresenceCounts', file: 'client/src/hooks/usePresence.ts', description: 'Polls live head-counts for every session every 5 seconds.', apis: ['GET /api/presence'] },
   { kind: 'Hook', name: 'useSessionRoom', file: 'client/src/hooks/usePresence.ts', description: 'Joins a session room while mounted: heartbeat every 5 s, leave on unmount or tab close (sendBeacon).', apis: ['POST /api/presence/heartbeat', 'POST /api/presence/leave'] },
   { kind: 'Context', name: 'AppProvider / useApp', file: 'client/src/context/AppContext.tsx', description: 'Holds the current view (parent or staff), persists it, and updates the auth headers the API client sends.' },
   { kind: 'Context', name: 'ToastProvider / useToast', file: 'client/src/context/ToastContext.tsx', description: 'Success/error toasts styled like the Bloomily phone notification (logo tile + bold message).' },

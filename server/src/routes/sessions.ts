@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { Session, SessionInput, SessionQuery } from '../../../shared/schemas.ts';
-import { db } from '../db.ts';
+import { all, run } from '../db.ts';
 import { defineRoute } from '../http.ts';
 import { newId } from '../ids.ts';
 import { SESSION_SELECT, getSession, toSession } from '../repo.ts';
@@ -16,7 +16,7 @@ defineRoute(
     query: SessionQuery,
     response: z.array(Session),
   },
-  ({ query }) => {
+  async ({ query }) => {
     const where: string[] = [];
     const args: string[] = [];
     if (query.upcoming !== 'false') {
@@ -28,7 +28,7 @@ defineRoute(
       args.push(query.category);
     }
     const sql = `${SESSION_SELECT} ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY s.starts_at`;
-    return db.prepare(sql).all(...args).map((r) => toSession(r as Record<string, unknown>));
+    return (await all(sql, args)).map(toSession);
   },
 );
 
@@ -56,14 +56,14 @@ defineRoute(
     body: SessionInput,
     response: Session,
   },
-  ({ body }) => {
+  async ({ body }) => {
     const id = newId('ses');
-    db.prepare(`
+    await run(`
       INSERT INTO sessions (id, title, description, instructor_name, category, location, starts_at, ends_at, capacity, min_age, max_age, price_cents, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
       id, body.title, body.description, body.instructorName, body.category, body.location,
       body.startsAt, body.endsAt, body.capacity, body.minAge, body.maxAge, body.priceCents, new Date().toISOString(),
-    );
+    ]);
     return getSession(id);
   },
 );

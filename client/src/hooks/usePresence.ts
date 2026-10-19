@@ -18,9 +18,9 @@ function getClientId(): string {
   }
 }
 
-/** Polls GET /api/presence every 3 s and returns sessionId → live count. */
+/** Polls GET /api/presence every 5 s and returns sessionId → live count. */
 export function usePresenceCounts(): Record<string, number> {
-  const { data } = useQuery('presence', api.getPresence, { intervalMs: 3000 });
+  const { data } = useQuery('presence', api.getPresence, { intervalMs: 5000 });
   return data?.counts ?? {};
 }
 

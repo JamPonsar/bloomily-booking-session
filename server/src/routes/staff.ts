@@ -1,5 +1,5 @@
 import { DETAILS_UNLOCK_HOURS, StaffSessionRoster } from '../../../shared/schemas.ts';
-import { db } from '../db.ts';
+import { all } from '../db.ts';
 import { defineRoute } from '../http.ts';
 import { getSession, toStaffChildView } from '../repo.ts';
 
@@ -18,26 +18,26 @@ defineRoute(
     auth: 'staff',
     response: StaffSessionRoster,
   },
-  ({ params }) => {
-    const session = getSession(params.sessionId);
+  async ({ params }) => {
+    const session = await getSession(params.sessionId);
     const cutoff = new Date(Date.now() - UNLOCK_MS).toISOString();
     // Sensitive columns are NULL unless the booking is old enough.
-    const rows = db.prepare(`
+    const rows = (await all(`
       SELECT b.id AS booking_id, b.created_at AS booked_at,
              c.first_name, c.last_name, c.date_of_birth, c.dietary_restrictions,
-             b.created_at <= ?1 AS unlocked,
-             CASE WHEN b.created_at <= ?1 THEN p.first_name || ' ' || p.last_name END AS parent_name,
-             CASE WHEN b.created_at <= ?1 THEN p.email END AS parent_email,
-             CASE WHEN b.created_at <= ?1 THEN p.phone END AS parent_phone,
-             CASE WHEN b.created_at <= ?1 THEN p.address END AS address,
-             CASE WHEN b.created_at <= ?1 THEN p.emergency_contact_name END AS emergency_contact_name,
-             CASE WHEN b.created_at <= ?1 THEN p.emergency_contact_phone END AS emergency_contact_phone,
-             CASE WHEN b.created_at <= ?1 THEN c.medical_notes END AS medical_notes
+             b.created_at <= $1 AS unlocked,
+             CASE WHEN b.created_at <= $1 THEN p.first_name || ' ' || p.last_name END AS parent_name,
+             CASE WHEN b.created_at <= $1 THEN p.email END AS parent_email,
+             CASE WHEN b.created_at <= $1 THEN p.phone END AS parent_phone,
+             CASE WHEN b.created_at <= $1 THEN p.address END AS address,
+             CASE WHEN b.created_at <= $1 THEN p.emergency_contact_name END AS emergency_contact_name,
+             CASE WHEN b.created_at <= $1 THEN p.emergency_contact_phone END AS emergency_contact_phone,
+             CASE WHEN b.created_at <= $1 THEN c.medical_notes END AS medical_notes
       FROM bookings b
       JOIN children c ON c.id = b.child_id
       JOIN parents p ON p.id = b.parent_id
-      WHERE b.session_id = ?2 AND b.status = 'confirmed'
-      ORDER BY c.first_name, c.last_name`).all(cutoff, session.id) as Array<Record<string, unknown>>;
+      WHERE b.session_id = $2 AND b.status = 'confirmed'
+      ORDER BY c.first_name, c.last_name`, [cutoff, session.id])) as Array<Record<string, unknown>>;
 
     const roster = rows.map((r) => ({
       bookingId: r.booking_id as string,

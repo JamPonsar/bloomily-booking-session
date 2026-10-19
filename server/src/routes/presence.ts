@@ -13,7 +13,7 @@ defineRoute(
     auth: 'public',
     response: PresenceCounts,
   },
-  () => ({ counts: presence.counts(), updatedAt: new Date().toISOString() }),
+  async () => ({ counts: await presence.counts(), updatedAt: new Date().toISOString() }),
 );
 
 defineRoute(
@@ -27,7 +27,7 @@ defineRoute(
     body: PresenceHeartbeat,
     response: z.object({ sessionId: z.string(), count: z.number().int() }),
   },
-  ({ body }) => ({ sessionId: body.sessionId, count: presence.heartbeat(body.sessionId, body.clientId) }),
+  async ({ body }) => ({ sessionId: body.sessionId, count: await presence.heartbeat(body.sessionId, body.clientId) }),
 );
 
 defineRoute(

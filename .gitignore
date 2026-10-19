@@ -3,3 +3,7 @@ client/dist/
 data/
 *.log
 .DS_Store
+.env
+.env.*
+!.env.example
+.vercel/

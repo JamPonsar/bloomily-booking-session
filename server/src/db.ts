@@ -1,10 +1,63 @@
-import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import pg from 'pg';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { seed } from './seed.ts';
 
-export const DB_PATH = process.env.DB_PATH ?? fileURLToPath(new URL('../../data/bloomily.db', import.meta.url));
+const rawUrl = process.env.DATABASE_URL ?? process.env.POSTGRES_URL;
+// Neon's strings say sslmode=require; pg warns about its future meaning, so pin the strict mode it already uses.
+const url = rawUrl?.replace('sslmode=require', 'sslmode=verify-full');
+if (!url) {
+  throw new Error('DATABASE_URL is not set. Copy .env.example to .env (locally) or add it in Vercel → Settings → Environment Variables.');
+}
+
+/** Serverless instances are short-lived, so keep the pool small; Neon's pooler does the real pooling. */
+export const pool = new pg.Pool({ connectionString: url, max: process.env.VERCEL ? 3 : 8 });
+// Neon closes idle connections; without this handler that would crash the process.
+pool.on('error', (err) => console.error('[db] idle client error:', err.message));
+
+type Row = Record<string, unknown>;
+const txStore = new AsyncLocalStorage<pg.PoolClient>();
+const executor = () => txStore.getStore() ?? pool;
+
+/** SQL is written with `?` placeholders; Postgres wants $1, $2, … */
+const toPg = (sql: string) => {
+  let i = 0;
+  return sql.replace(/\?/g, () => `$${++i}`);
+};
+
+/** Runs a query and returns all rows. Uses the surrounding transaction when there is one. */
+export async function all<T = Row>(sql: string, params: unknown[] = []): Promise<T[]> {
+  const res = await executor().query(toPg(sql), params);
+  return res.rows as T[];
+}
+
+export async function get<T = Row>(sql: string, params: unknown[] = []): Promise<T | undefined> {
+  return (await all<T>(sql, params))[0];
+}
+
+/** Runs a write and returns the number of affected rows. */
+export async function run(sql: string, params: unknown[] = []): Promise<number> {
+  const res = await executor().query(toPg(sql), params);
+  return res.rowCount ?? 0;
+}
+
+/**
+ * Runs fn inside a transaction. Every all()/get()/run() call made while fn is
+ * executing (however deeply nested) uses the same connection, and rolls back on any thrown error.
+ */
+export async function transaction<T>(fn: () => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await txStore.run(client, fn);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
 
 /**
  * Relational schema. Every relationship is a real foreign key:
@@ -12,6 +65,7 @@ export const DB_PATH = process.env.DB_PATH ?? fileURLToPath(new URL('../../data/
  *   parents 1──* bookings     (bookings.parent_id)
  *   children 1──* bookings    (bookings.child_id)
  *   sessions 1──* bookings    (bookings.session_id)
+ * Timestamps are ISO-8601 UTC strings so they sort and compare as text.
  */
 const DDL = `
 CREATE TABLE IF NOT EXISTS parents (
@@ -73,28 +127,44 @@ CREATE INDEX IF NOT EXISTS idx_bookings_session ON bookings(session_id);
 CREATE INDEX IF NOT EXISTS idx_bookings_parent ON bookings(parent_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_bookings_active_child
   ON bookings(session_id, child_id) WHERE status = 'confirmed';
+
+CREATE TABLE IF NOT EXISTS presence (
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  client_id  TEXT NOT NULL,
+  seen_at    TEXT NOT NULL,
+  PRIMARY KEY (session_id, client_id)
+);
 `;
 
-mkdirSync(dirname(DB_PATH), { recursive: true });
-export const db = new DatabaseSync(DB_PATH);
-db.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;');
-db.exec(DDL);
+/** Reseed when fewer than this many sessions are still ahead, so a hosted demo never goes stale. */
+const MIN_UPCOMING_SESSIONS = 15;
+const SETUP_LOCK = 727274;
 
-const { n } = db.prepare('SELECT COUNT(*) AS n FROM sessions').get() as { n: number };
-if (n === 0) {
-  transaction(() => seed(db));
-  console.log('[db] seeded demo data');
+async function setup({ force }: { force: boolean }): Promise<void> {
+  await transaction(async () => {
+    // One instance at a time: concurrent cold starts must not race on DDL or seeding.
+    await all('SELECT pg_advisory_xact_lock(?)', [SETUP_LOCK]);
+    await executor().query(DDL);
+    const { n } = (await get<{ n: string }>('SELECT COUNT(*) AS n FROM sessions WHERE ends_at > ?', [new Date().toISOString()]))!;
+    if (force || Number(n) < MIN_UPCOMING_SESSIONS) {
+      await run('TRUNCATE bookings, children, sessions, parents, presence');
+      await seed();
+      console.log('[db] seeded demo data');
+    }
+  });
 }
 
-/** Runs fn inside a write transaction, rolling back on any thrown error. */
-export function transaction<T>(fn: () => T): T {
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    const result = fn();
-    db.exec('COMMIT');
-    return result;
-  } catch (err) {
-    db.exec('ROLLBACK');
+let readyPromise: Promise<void> | null = null;
+
+/** Creates tables and demo data on first use (and again if the demo schedule has run out). Safe to call on every request. */
+export function ready(): Promise<void> {
+  return (readyPromise ??= setup({ force: false }).catch((err) => {
+    readyPromise = null;
     throw err;
-  }
+  }));
+}
+
+/** Wipes everything and re-creates the demo data (npm run db:reset). */
+export function resetDemoData(): Promise<void> {
+  return setup({ force: true });
 }
