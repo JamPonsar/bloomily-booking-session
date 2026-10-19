@@ -20,8 +20,9 @@ export const app = express();
 app.disable('x-powered-by');
 app.use(express.json({ limit: '100kb' }));
 // First request on a fresh instance creates the tables / demo data if needed.
-app.use('/api', async (_req, _res, next) => {
-  await ready();
+// /api/health skips this so it can tell "the function runs" apart from "the database is reachable".
+app.use('/api', async (req, _res, next) => {
+  if (req.path !== '/health') await ready();
   next();
 });
 app.use('/api', apiRouter);

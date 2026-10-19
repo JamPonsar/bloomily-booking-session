@@ -25,7 +25,7 @@ Requires Node 24 (native TypeScript type stripping, so there's no compile step f
 One Vercel project serves both halves, like a classic Vite + Express setup:
 
 - The Vite build (`client/dist`) is served as static files.
-- `api/index.js` exports the Express app as a serverless function; `vercel.json` rewrites `/api/*` to it and everything else to `index.html` for React Router.
+- `api/index.js` is the Express app bundled into one self-contained file (esbuild, `npm run build:api`) and exported as a serverless function; `vercel.json` rewrites `/api/*` to it and everything else to `index.html` for React Router. The bundle is generated, but **committed on purpose**: Vercel only detects functions that exist in the repo, and a single file avoids any file-tracing problems with the TypeScript source. `npm run build` regenerates it, so re-run it (and commit the result) after changing anything under `server/` or `shared/`.
 
 Steps:
 

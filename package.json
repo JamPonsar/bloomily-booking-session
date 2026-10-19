@@ -7,10 +7,11 @@
     "dev": "concurrently -k -n api,web -c magenta,cyan \"npm:dev:server\" \"npm:dev:client\"",
     "dev:server": "node --env-file-if-exists=.env --watch server/src/index.ts",
     "dev:client": "vite --config client/vite.config.ts",
-    "build": "vite build --config client/vite.config.ts",
+    "build": "vite build --config client/vite.config.ts && npm run build:api",
     "start": "npm run build && NODE_ENV=production node --env-file-if-exists=.env server/src/index.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "db:reset": "node --env-file-if-exists=.env server/src/reset.ts"
+    "db:reset": "node --env-file-if-exists=.env server/src/reset.ts",
+    "build:api": "esbuild server/src/app.ts --bundle --platform=node --target=node22 --format=esm --external:pg-native --log-level=warning --banner:js=\"import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);\" --outfile=api/index.js"
   },
   "engines": {
     "node": "24.x"
@@ -28,6 +29,7 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
     "concurrently": "^10.0.6",
+    "esbuild": "^0.28.2",
     "lucide-react": "^1.59.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",

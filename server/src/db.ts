@@ -2,21 +2,29 @@ import pg from 'pg';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { seed } from './seed.ts';
 
-const rawUrl = process.env.DATABASE_URL ?? process.env.POSTGRES_URL;
-// Neon's strings say sslmode=require; pg warns about its future meaning, so pin the strict mode it already uses.
-const url = rawUrl?.replace('sslmode=require', 'sslmode=verify-full');
-if (!url) {
-  throw new Error('DATABASE_URL is not set. Copy .env.example to .env (locally) or add it in Vercel → Settings → Environment Variables.');
+/** Created on first use, so a missing DATABASE_URL becomes a readable API error instead of a crashed function. */
+let poolInstance: pg.Pool | null = null;
+export function getPool(): pg.Pool {
+  if (poolInstance) return poolInstance;
+  const rawUrl = process.env.DATABASE_URL ?? process.env.POSTGRES_URL;
+  if (!rawUrl) {
+    throw Object.assign(
+      new Error('DATABASE_URL is not set. Add it in Vercel → Settings → Environment Variables (the Neon integration does this), then redeploy. Locally, copy .env.example to .env.'),
+      { code: 'NO_DATABASE_URL' },
+    );
+  }
+  // Neon's strings say sslmode=require; pg warns about its future meaning, so pin the strict mode it already uses.
+  const connectionString = rawUrl.replace('sslmode=require', 'sslmode=verify-full');
+  // Serverless instances are short-lived, so keep the pool small; Neon's pooler does the real pooling.
+  poolInstance = new pg.Pool({ connectionString, max: process.env.VERCEL ? 3 : 8 });
+  // Neon closes idle connections; without this handler that would crash the process.
+  poolInstance.on('error', (err) => console.error('[db] idle client error:', err.message));
+  return poolInstance;
 }
-
-/** Serverless instances are short-lived, so keep the pool small; Neon's pooler does the real pooling. */
-export const pool = new pg.Pool({ connectionString: url, max: process.env.VERCEL ? 3 : 8 });
-// Neon closes idle connections; without this handler that would crash the process.
-pool.on('error', (err) => console.error('[db] idle client error:', err.message));
 
 type Row = Record<string, unknown>;
 const txStore = new AsyncLocalStorage<pg.PoolClient>();
-const executor = () => txStore.getStore() ?? pool;
+const executor = () => txStore.getStore() ?? getPool();
 
 /** SQL is written with `?` placeholders; Postgres wants $1, $2, … */
 const toPg = (sql: string) => {
@@ -45,7 +53,7 @@ export async function run(sql: string, params: unknown[] = []): Promise<number> 
  * executing (however deeply nested) uses the same connection, and rolls back on any thrown error.
  */
 export async function transaction<T>(fn: () => Promise<T>): Promise<T> {
-  const client = await pool.connect();
+  const client = await getPool().connect();
   try {
     await client.query('BEGIN');
     const result = await txStore.run(client, fn);

@@ -40,6 +40,10 @@ export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
     res.status(400).json({ error: { code: 'INVALID_JSON', message: 'Request body is not valid JSON' } });
     return;
   }
+  if (err?.code === 'NO_DATABASE_URL') {
+    res.status(503).json({ error: { code: 'DATABASE_NOT_CONFIGURED', message: err.message } });
+    return;
+  }
   if (err?.code === '23505') {
     res.status(409).json({ error: { code: 'CONFLICT', message: 'That record already exists' } });
     return;
